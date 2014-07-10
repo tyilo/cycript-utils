@@ -2,7 +2,7 @@
 	var shouldLoadConsts = true;
 	var shouldLoadCFuncs = true;
 	var shouldLoadFuncs = true;
-	var funcsToLoad = ['exec', 'include', 'sizeof', 'logify', 'apply', 'str2voidPtr', 'voidPtr2str'];
+	var funcsToLoad = ['exec', 'include', 'sizeof', 'logify', 'apply', 'str2voidPtr', 'voidPtr2str', 'isMemoryValid', 'isObject'];
 	
 	// eval can't handle @encode etc.
 	exports.exec = function(str) {		
@@ -235,6 +235,10 @@
 		var argTypes = [];
 		for(var i = 0; i < argc; i++) {
 			argTypes.push(voidPtr);
+			
+			if(typeof args[i] === 'string') {
+				args[i] = exports.str2voidPtr(args[i]);
+			}
 		}
 
 		var type = voidPtr.functionWith.apply(voidPtr, argTypes);
@@ -258,6 +262,74 @@
 	exports.voidPtr2str = function(voidPtr) {
 		var strdup = @encode(char *(void *))(dlsym(RTLD_DEFAULT, "strdup"));
 		return strdup(voidPtr);
+	};
+	
+	exports.isMemoryValid = function(ptr) {
+		if(typeof ptr === 'string') {
+			return true;
+		}
+		
+		var fds = new @encode(int [2]);
+		exports.apply("pipe", [fds]);
+		var result = exports.apply("write", [fds[1], ptr, 1]) == 1;
+		
+		exports.apply("close", [fds[0]]);
+		exports.apply("close", [fds[1]]);
+		
+		return result;
+	};
+	
+	exports.isObject = function(obj) {
+		obj = @encode(void *)(obj);
+		var lastObj = -1;
+		
+		function objc_isa_ptr(obj) {
+			// See http://www.sealiesoftware.com/blog/archive/2013/09/24/objc_explain_Non-pointer_isa.html
+			var objc_debug_isa_class_mask = 0x00000001fffffffa;
+			obj = (obj & 1)? (obj & objc_debug_isa_class_mask): obj;
+			
+			if((obj & (exports.sizeof(@encode(void *)) - 1)) != 0) {
+				return null;
+			} else {
+				return obj;
+			}
+		}
+		
+		function ptrValue(obj) {
+			return obj? obj.valueOf(): null;
+		}
+		
+		var foundMetaClass = false;
+		
+		for(obj = objc_isa_ptr(obj); exports.isMemoryValid(obj); ) {
+			obj = *@encode(void **)(obj);
+			
+			if(ptrValue(obj) == ptrValue(lastObj)) {
+				foundMetaClass = true;
+				break;
+			}
+			
+			lastObj = obj;
+		}
+		
+		if(!foundMetaClass) {
+			return false;
+		}
+		
+		if(lastObj === -1 || lastObj === null) {
+			return false;
+		}
+		
+		var obj_class = objc_isa_ptr(@encode(void **)(obj)[1]);
+		
+		if(!exports.isMemoryValid(obj_class)) {
+			return false;
+		}
+		
+		var metaclass = objc_isa_ptr(@encode(void **)(obj_class)[0]);
+		var superclass = objc_isa_ptr(@encode(void **)(obj_class)[1]);
+		
+		return ptrValue(obj) == ptrValue(metaclass) && superclass == null;
 	};
 	
 	if(shouldLoadFuncs) {
