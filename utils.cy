@@ -2,7 +2,7 @@
 	var shouldLoadConsts = true;
 	var shouldLoadCFuncs = true;
 	var shouldLoadFuncs = true;
-	var funcsToLoad = ['exec', 'include', 'sizeof', 'logify', 'apply', 'str2voidPtr', 'voidPtr2str', 'isMemoryValid', 'isObject'];
+	var funcsToLoad = ["exec", "include", "sizeof", "logify", "apply", "str2voidPtr", "voidPtr2str", "isMemoryReadable", "isObject"];
 	
 	// eval can't handle @encode etc.
 	exports.exec = function(str) {		
@@ -50,7 +50,7 @@
 
 		return r.result;
 	};
-	exports.include = function(str, load) {
+	exports.applyTypedefs = function(str) {
 		var typedefs = {
 			"restrict": "",
 			"FILE": "void",
@@ -77,6 +77,12 @@
 		for(var k in typedefs) {
 			str = str.replace(new RegExp("(\\s|\\*|,|\\(|^)" + k + "(\\s|\\*|,|\\)|$)", "g"), "$1" + typedefs[k] + "$2");
 		}
+		
+		return str;
+	};
+	exports.include = function(str, load) {
+		str = exports.applyTypedefs(str);
+		
 		var re = /^\s*([^(]*(?:\s+|\*))(\w*)\s*\(([^)]*)\)\s*;?\s*$/;
 		var match = re.exec(str);
 		if(!match) {
@@ -132,6 +138,8 @@
 	exports.funcs = {};
 	exports.loadfuncs = function() {
 		var defs = [
+			// <stdlib.h>
+			"void *calloc(size_t num, size_t size)",
 			// <string.h>
 			"char *strcpy(char *restrict dst, const char *restrict src)",
 			"char *strdup(const char *s1)",
@@ -169,6 +177,11 @@
 	}
 
 	exports.sizeof = function(type) {
+		if(typeof type === "string") {
+			type = exports.applyTypedefs(type);
+			type = exports.exec("@encode(" + type + ")");
+		}
+		
 		// (const) char * has "infinite" preceision
 		if(type.toString().slice(-1) === "*") {
 			return exports.sizeof(@encode(void *));
@@ -230,13 +243,18 @@
 	};
 
 	exports.apply = function(fun, args) {
+		
+		if(!(args instanceof Array)) {
+			throw "Args needs to be an array!";
+		}
+		
 		var argc = args.length;
 		var voidPtr = new Type("v").pointerTo();
 		var argTypes = [];
 		for(var i = 0; i < argc; i++) {
 			argTypes.push(voidPtr);
 			
-			if(typeof args[i] === 'string') {
+			if(typeof args[i] === "string") {
 				args[i] = exports.str2voidPtr(args[i]);
 			}
 		}
@@ -264,8 +282,8 @@
 		return strdup(voidPtr);
 	};
 	
-	exports.isMemoryValid = function(ptr) {
-		if(typeof ptr === 'string') {
+	exports.isMemoryReadable = function(ptr) {
+		if(typeof ptr === "string") {
 			return true;
 		}
 		
@@ -301,7 +319,7 @@
 		
 		var foundMetaClass = false;
 		
-		for(obj = objc_isa_ptr(obj); exports.isMemoryValid(obj); ) {
+		for(obj = objc_isa_ptr(obj); exports.isMemoryReadable(obj); ) {
 			obj = *@encode(void **)(obj);
 			
 			if(ptrValue(obj) == ptrValue(lastObj)) {
@@ -322,7 +340,7 @@
 		
 		var obj_class = objc_isa_ptr(@encode(void **)(obj)[1]);
 		
-		if(!exports.isMemoryValid(obj_class)) {
+		if(!exports.isMemoryReadable(obj_class)) {
 			return false;
 		}
 		
