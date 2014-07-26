@@ -6,21 +6,28 @@
 	
 	// eval can't handle @encode etc.
 	exports.exec = function(str) {		
-		mkdir = @encode(int (const char *, int))(dlsym(RTLD_DEFAULT, "mkdir"));
-		tempnam = @encode(char *(const char *, const char *))(dlsym(RTLD_DEFAULT, "tempnam"));
-		fopen = @encode(void *(const char *, const char *))(dlsym(RTLD_DEFAULT, "fopen"));
-		fclose = @encode(int (void *))(dlsym(RTLD_DEFAULT, "fclose"));
-		fwrite = @encode(int (const char *, int, int, void *))(dlsym(RTLD_DEFAULT, "fwrite"));
-		symlink = @encode(int (const char *, const char *))(dlsym(RTLD_DEFAULT, "symlink"));
-		unlink = @encode(int (const char *))(dlsym(RTLD_DEFAULT, "unlink"));
+		var mkdir = @encode(int (const char *, int))(dlsym(RTLD_DEFAULT, "mkdir"));
+		var tempnam = @encode(char *(const char *, const char *))(dlsym(RTLD_DEFAULT, "tempnam"));
+		var fopen = @encode(void *(const char *, const char *))(dlsym(RTLD_DEFAULT, "fopen"));
+		var fclose = @encode(int (void *))(dlsym(RTLD_DEFAULT, "fclose"));
+		var fwrite = @encode(int (const char *, int, int, void *))(dlsym(RTLD_DEFAULT, "fwrite"));
+		var symlink = @encode(int (const char *, const char *))(dlsym(RTLD_DEFAULT, "symlink"));
+		var unlink = @encode(int (const char *))(dlsym(RTLD_DEFAULT, "unlink"));
+		var getenv = @encode(const char *(const char *))(dlsym(RTLD_DEFAULT, "getenv"));
+		var setenv = @encode(int (const char *, const char *, int))(dlsym(RTLD_DEFAULT, "setenv"));
 		
 		var libdir = "/usr/lib/cycript0.9";
 		var dir = libdir + "/tmp";
 
 		mkdir(dir, 0777);
+		
+		// This is needed because tempnam seems to ignore the first argument on i386
+		var old_tmpdir = getenv("TMPDIR");
+		setenv("TMPDIR", dir, 1);
 
 		// No freeing :(
 		var f = tempnam(dir, "exec-");
+		setenv("TMPDIR", old_tmpdir, 1);
 		if(!f) {
 			return false;
 		}
@@ -130,7 +137,7 @@
 	c.VM_PROT_ALL =     c.VM_PROT_READ | c.VM_PROT_WRITE | c.VM_PROT_EXECUTE;
 	
 	if(shouldLoadConsts) {
-		for(k in c) {
+		for(var k in c) {
 			Cycript.all[k] = c[k];
 		}
 	}
@@ -243,7 +250,6 @@
 	};
 
 	exports.apply = function(fun, args) {
-		
 		if(!(args instanceof Array)) {
 			throw "Args needs to be an array!";
 		}
