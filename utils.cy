@@ -101,6 +101,7 @@
 	*/
 	utils.applyTypedefs = function(str) {
 		var typedefs = {
+			"struct": "",
 			"restrict": "",
 			"FILE": "void",
 			"size_t": "uint64_t",
@@ -121,6 +122,9 @@
 			"boolean_t": "unsigned int",
 			"vm_prot_t": "int",
 			"mach_msg_type_number_t": "unsigned int",
+			"cpu_type_t": "int",
+			"cpu_subtype_t": "int",
+			"cpu_threadtype_t": "int",
 		};
 		
 		for(var k in typedefs) {
