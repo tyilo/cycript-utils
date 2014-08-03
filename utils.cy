@@ -8,7 +8,7 @@
 	// Expose functions defined here to cycript's global scope
 	var shouldExposeFuncs = true;
 	// Which functions to expose
-	var funcsToExpose = ["exec", "include", "sizeof", "logify", "apply", "str2voidPtr", "voidPtr2str", "double2voidPtr", "voidPtr2double", "isMemoryReadable", "isObject", "makeStruct"];
+	var funcsToExpose = ["getKeys", "reloadUtils", "exec", "include", "sizeof", "logify", "apply", "str2voidPtr", "voidPtr2str", "double2voidPtr", "voidPtr2double", "isMemoryReadable", "isObject", "makeStruct"];
 	
 	// C functions that utils.loadFuncs loads
 	var CFuncsDeclarations = [
@@ -17,7 +17,8 @@
 		// <string.h>
 		"char *strcpy(char *restrict dst, const char *restrict src)",
 		"char *strdup(const char *s1)",
-		"void* memset(void* dest, int ch, size_t count)",
+		"void *memset(void *dest, int ch, size_t count)",
+		"void *memcpy(void *dest, const void *src, size_t count)",
 		// <stdio.h>
 		"FILE *fopen(const char *, const char *)",
 		"int fclose(FILE *)",
@@ -31,6 +32,89 @@
 		"kern_return_t mach_vm_read(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, vm_offset_t *data, mach_msg_type_number_t *dataCnt)",
 	];
 	
+	// Various constants
+	utils.constants = {
+		// <sys/mman.h>
+		PROT_NONE:  0x0,
+		PROT_READ:  0x1,
+		PROT_WRITE: 0x2,
+		PROT_EXEC:  0x4,
+		// <mach/vm_prot.h>
+		VM_PROT_NONE:       0x0,
+		VM_PROT_READ:       0x1,
+		VM_PROT_WRITE:      0x2,
+		VM_PROT_EXECUTE:    0x4,
+		VM_PROT_NO_CHANGE:  0x8,
+		VM_PROT_COPY:       0x10,
+		VM_PROT_WANTS_COPY: 0x10,
+		VM_PROT_IS_MASK:    0x40,
+		// <mach-o/loader.h>
+		MH_MAGIC:    0xfeedface,
+		MH_CIGAM:    0xcefaedfe,
+		MH_MAGIC_64: 0xfeedfacf,
+		MH_CIGAM_64: 0xcffaedfe,
+	};
+	
+	var c = utils.constants;
+	c.VM_PROT_DEFAULT = c.VM_PROT_READ | c.VM_PROT_WRITE;
+	c.VM_PROT_ALL =     c.VM_PROT_READ | c.VM_PROT_WRITE | c.VM_PROT_EXECUTE;
+	
+	/*
+		Returns an array of all keys associated with an object
+		Useful for inspecting the global Cycript object
+		
+		Usage:
+			cy# utils.getKeys(Cycript)
+			["gc","Functor","Pointer","Type","all","alls","ObjectiveC","Instance","Selector","objc_super"]
+	*/
+	utils.getKeys = function(obj) {
+		var keys = [];
+		for(k in obj) {
+			keys.push(k);
+		}
+		return keys;
+	};
+	
+	var libdir = "/usr/lib/cycript0.9";
+	
+	function getTmpDir() {
+		var dir = libdir + "/tmp";
+
+		utils.apply("mkdir", [dir, 0777]);
+		
+		return dir;
+	}
+	
+	function requireFile(path) {
+		return require(path.replace(libdir + "/", "").replace(/.cy$/, ""));
+	}
+	
+	/*
+		Reloads this file into cydia for development purposes
+		
+		Usage:
+			cy# new_utils = utils.reloadUtils(); 0
+			0
+			cy# new_utils == utils
+			false
+	*/
+	utils.reloadUtils = function() {
+		var tmpdir = getTmpDir();
+		
+		var template = utils.str2voidPtr(tmpdir + "/XXXXXXXX");
+		utils.apply("mkdtemp", [template]);
+		
+		var f = utils.voidPtr2str(template) + "/utils.cy";
+		utils.apply("symlink", [libdir + "/com/tyilo/utils.cy", f]);
+		
+		var new_utils = requireFile(f);
+		
+		utils.apply("unlink", [f]);
+		utils.apply("rmdir", [template]);
+		
+		return new_utils;
+	};
+	
 	/*
 		Replacement for eval that can handle @encode etc.
 		
@@ -39,50 +123,33 @@
 			@encode(void*(int,char))
 	*/
 	utils.exec = function(str) {
-		var mkdir = @encode(int (const char *, int))(dlsym(RTLD_DEFAULT, "mkdir"));
-		var tempnam = @encode(char *(const char *, const char *))(dlsym(RTLD_DEFAULT, "tempnam"));
-		var fopen = @encode(void *(const char *, const char *))(dlsym(RTLD_DEFAULT, "fopen"));
-		var fclose = @encode(int (void *))(dlsym(RTLD_DEFAULT, "fclose"));
-		var fwrite = @encode(int (const char *, int, int, void *))(dlsym(RTLD_DEFAULT, "fwrite"));
-		var symlink = @encode(int (const char *, const char *))(dlsym(RTLD_DEFAULT, "symlink"));
-		var unlink = @encode(int (const char *))(dlsym(RTLD_DEFAULT, "unlink"));
-		var getenv = @encode(const char *(const char *))(dlsym(RTLD_DEFAULT, "getenv"));
-		var setenv = @encode(int (const char *, const char *, int))(dlsym(RTLD_DEFAULT, "setenv"));
+		var dir = getTmpDir();
 		
-		var libdir = "/usr/lib/cycript0.9";
-		var dir = libdir + "/tmp";
-
-		mkdir(dir, 0777);
+		var template = utils.str2voidPtr(dir + "/exec-XXXXXXXX.cy");
 		
-		// This is needed because tempnam seems to ignore the first argument on i386
-		var old_tmpdir = getenv("TMPDIR");
-		setenv("TMPDIR", dir, 1);
-
-		// No freeing :(
-		var f = tempnam(dir, "exec-");
-		setenv("TMPDIR", old_tmpdir, 1);
+		utils.apply("mkstemps", [template, 3]);
+		var f = utils.voidPtr2str(template);
+		free(template);
+		
 		if(!f) {
 			return false;
 		}
-
-		symlink(f, f + ".cy");
 		
 		str = "exports.result = " + str;
 
-		var handle = fopen(f, "w");
-		fwrite(str, str.length, 1, handle);
-		fclose(handle);
+		var handle = utils.apply("fopen", [f, "w"]);
+		utils.apply("fwrite", [str, str.length, 1, handle]);
+		utils.apply("fclose", [handle]);
 		
 		var r;
 		var except = null;
 		try {
-			r = require(f.replace(libdir + "/", ""));
+			r = requireFile(f);
 		} catch(e) {
 			except = e;
 		}
 
-		unlink(f + ".cy");
-		unlink(f);
+		utils.apply("unlink", [f]);
 		
 		if(except !== null) {
 			throw except;
@@ -546,24 +613,9 @@
 		return new Type(typeStr);
 	};
 	
-	// Various constants
-	utils.constants = {
-		VM_PROT_NONE:       0x0,
-		VM_PROT_READ:       0x1,
-		VM_PROT_WRITE:      0x2,
-		VM_PROT_EXECUTE:    0x4,
-		VM_PROT_NO_CHANGE:  0x8,
-		VM_PROT_COPY:       0x10,
-		VM_PROT_WANTS_COPY: 0x10,
-		VM_PROT_IS_MASK:    0x40,
-	};
-	var c = utils.constants;
-	c.VM_PROT_DEFAULT = c.VM_PROT_READ | c.VM_PROT_WRITE;
-	c.VM_PROT_ALL =     c.VM_PROT_READ | c.VM_PROT_WRITE | c.VM_PROT_EXECUTE;
-	
 	if(shouldExposeConsts) {
-		for(var k in c) {
-			Cycript.all[k] = c[k];
+		for(var k in utils.constants) {
+			Cycript.all[k] = utils.constants[k];
 		}
 	}
 	
