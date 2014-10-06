@@ -8,7 +8,7 @@
 	// Expose functions defined here to cycript's global scope
 	var shouldExposeFuncs = true;
 	// Which functions to expose
-	var funcsToExpose = ["getKeys", "reloadUtils", "exec", "include", "sizeof", "logify", "apply", "str2voidPtr", "voidPtr2str", "double2voidPtr", "voidPtr2double", "isMemoryReadable", "isObject", "makeStruct"];
+	var funcsToExpose = ["align", "getKeys", "reloadUtils", "exec", "include", "sizeof", "logify", "apply", "str2voidPtr", "voidPtr2str", "double2voidPtr", "voidPtr2double", "isMemoryReadable", "isObject", "makeStruct", "dumpImages"];
 	
 	// C functions that utils.loadFuncs loads
 	var CFuncsDeclarations = [
@@ -39,6 +39,8 @@
 		PROT_READ:  0x1,
 		PROT_WRITE: 0x2,
 		PROT_EXEC:  0x4,
+		// <sys/sysctl.h>
+		CTL_MAXNAME: 12,
 		// <mach/vm_prot.h>
 		VM_PROT_NONE:       0x0,
 		VM_PROT_READ:       0x1,
@@ -53,11 +55,35 @@
 		MH_CIGAM:    0xcefaedfe,
 		MH_MAGIC_64: 0xfeedfacf,
 		MH_CIGAM_64: 0xcffaedfe,
+		// <mach/machine.h>
+		CPU_ARCH_ABI64: 0x01000000,
+		CPU_TYPE_X86: 7,
+		CPU_TYPE_ARM: 12,
 	};
 	
 	var c = utils.constants;
 	c.VM_PROT_DEFAULT = c.VM_PROT_READ | c.VM_PROT_WRITE;
 	c.VM_PROT_ALL =     c.VM_PROT_READ | c.VM_PROT_WRITE | c.VM_PROT_EXECUTE;
+	
+	c.CPU_TYPE_X86_64 = c.CPU_TYPE_X86 | c.CPU_ARCH_ABI64;
+	c.CPU_TYPE_ARM64 = c.CPU_TYPE_ARM | c.CPU_ARCH_ABI64;
+
+	/*
+		Aligns the pointer downwards, aligment must be a power of 2
+		Useful for mprotect
+
+		Usage:
+			cy# utils.align(0x100044, 0x1000).toString(16)
+			"100000"
+	*/
+	utils.align = function(ptr, alignment) {
+		var high = Math.floor(ptr / Math.pow(2, 32));
+		var low = ptr | 0;
+		
+		low = (low & ~(alignment - 1));
+		
+		return low + high * Math.pow(2, 32);
+	};
 	
 	/*
 		Returns an array of all keys associated with an object
@@ -90,7 +116,7 @@
 	}
 	
 	/*
-		Reloads this file into cydia for development purposes
+		Reloads this file into cycript for development purposes
 		
 		Usage:
 			cy# new_utils = utils.reloadUtils(); 0
@@ -592,7 +618,7 @@
 			cy# *@encode(int *)(f)
 			100
 	*/
-	utils.makeStruct = function(str, name) {		
+	utils.makeStruct = function(str, name) {
 		var fieldRe = /(?:\s|\n)*([^;]+\s*(?:\s|\*))([^;]+)\s*;/g;
 		
 		if(!name) {
@@ -610,9 +636,301 @@
 		
 		typeStr += "}";
 		
-		return new Type(typeStr);
+		var t = new Type(typeStr);
+		Cycript.all[name] = t;
+		return t;
 	};
 	
+	/*
+		Dumps all UI/NS Image instances to a temporary folder
+		Optionally takes a filter function to filter which images to dump
+		
+		Usage:
+			cy# utils.dumpImages()
+			"43 images written to /tmp/cycript-images-rdIbcB"
+			cy# utils.dumpImages(img => img.size.width == 16)
+			"5 images written to /tmp/cycript-images-8oso44"
+	*/
+	utils.dumpImages = function(filter_fun) {
+		var image_class = ObjectiveC.classes["UIImage"] || ObjectiveC.classes["NSImage"];
+		var images = choose(image_class);
+		
+		if(filter_fun) {
+			images = images.filter(filter_fun);
+		}
+		
+		if(images.length === 0) {
+			throw "No images found!"
+		}
+		
+		var template = utils.str2voidPtr("/tmp/cycript-images-XXXXXX");
+		utils.apply("mkdtemp", [template]);
+		var dir = utils.voidPtr2str(template);
+
+		for(var i = 0; i < images.length; i++) {
+			data = [images[i] TIFFRepresentation];
+			[data writeToFile:dir + "/" + i + ".tiff" atomically:YES];
+		}
+		
+		return images.length + " images written to " + dir;
+	}
+	
+	var app_class = ObjectiveC.classes["UIApplication"] || ObjectiveC.classes["NSApplication"];
+	var app = app_class && [app_class sharedApplication];
+	
+	/*
+		Uses a heuristic method to determine if the object's class is a standard one
+		
+		Usage:
+			cy# @implementation TestClass : NSObject {} @end
+			#"TestClass"
+			cy# [new NSObject, [], "foo", new TestClass].map(utils.is_not_standard_class)
+			[false,true,false,true]
+	*/
+	utils.is_not_standard_class = function(obj) {
+		var classname = [obj className];
+		while(classname[0] == '_') {
+			classname = classname.substr(1);
+		}
+		return !([classname hasPrefix:"UI"] || [classname hasPrefix:"NS"]);
+	};
+	/*
+		Internal function used utils.find_subviews and utils.find_subview_controllers
+	*/
+	function find_subviews_internal(view, predicate, transform) {
+		var arr = [];
+		var o = transform(view);
+		if(o && predicate(o)) {
+			arr.push(o);
+		}
+		
+		return arr.concat.apply(arr, view.subviews.map(x => find_subviews_internal(x, predicate, transform)));
+	}
+	
+	/*
+		Recusirvely finds all subviews satisfying a predicate
+		By default returns all subviews from the app's keyWindow
+		
+		Usage:
+			cy# utils.find_subviews().length
+			421
+			cy# utils.find_subviews(utils.is_not_standard_class).length
+			48
+			cy# utils.find_subviews(x => true, choose(UINavigationItemView)[0]).length
+			2
+	*/
+	utils.find_subviews = function(predicate, view) {		
+		predicate = predicate || (x => true);
+		view = view || app.keyWindow;
+		
+		return find_subviews_internal(view, predicate, x => x);
+	};
+	
+	/*
+		Like utils.find_subviews but for viewcontrollers instead of views
+	*/
+	utils.find_subview_controllers = function(predicate, view) {
+		predicate = predicate || (x => true);
+		view = view || app.keyWindow;
+		
+		return find_subviews_internal(view, predicate, x => x.viewDelegate || x.delegate);
+	};
+	
+	/*
+		Finds all classes with only one instance in the app's keyWindow's subviews
+		Also filter outs classes which are "standard"
+		
+		Usage:
+			cy# utils.find_interesting_view_classes().length
+			9
+	*/
+	utils.find_interesting_view_classes = function() {
+		var views = utils.find_subviews(utils.is_standard_class);
+		var classes = views.map(x => x.className.toString());
+		
+		var interesting_classes = classes.filter(x => classes.indexOf(x) === classes.lastIndexOf(x));
+		
+		return interesting_classes;
+	};
+	
+	/*
+		Like utils.find_interesting_view_classes but for viewcontroller classes
+	*/
+	utils.find_interesting_viewcontroller_classes = function() {
+		var views = utils.find_subview_controllers(utils.is_standard_class);
+		var classes = views.map(x => x.className.toString());
+		
+		var interesting_classes = classes.filter(x => classes.indexOf(x) === classes.lastIndexOf(x));
+		
+		return interesting_classes;
+	};
+	
+	/*
+		Recursively returns the superviews of the view
+		
+		Usage:
+			cy# utils.view_hierarchy(UIApp.keyWindow.subviews[0].subviews[0])
+			["", "", ""]
+	*/
+	utils.view_hierarchy = function(view) {
+		var arr = [];
+		do {
+			arr.unshift(view);
+		} while(view = view.superview);
+		
+		return arr;
+	};
+	
+	/*
+		Determines if UI/NS View is on the screen
+		
+		Usage:
+			cy# utils.is_on_screen(UIApp.keyWindow)
+			true
+			cy# utils.is_on_screen([new UIView init])
+			false
+	*/
+	utils.is_on_screen = function(view) {
+		var hierarchy = utils.view_hierarchy(view);
+		
+		return [hierarchy[hierarchy.length - 1] isEqual:app.keyWindow];
+	};
+	
+	/*
+		Returns the common superview of the two views
+		and two integers with the distance between the views and the superview
+		
+		Usage:
+			cy# rootview = [new UIView init]
+			...
+			cy# subview1 = [new UIView init]; [rootview addSubview:subview1];
+			cy# subview2 = [new UIView init]; [rootview addSubview:subview2];
+			cy# subview22 = [new UIView init]; [subview2 addSubview:subview22];
+			cy# utils.view_relation(subview1, subview22)
+			[#"<NSView: 0x100509ad0>",1,2]
+	*/
+	utils.view_relation = function(view1, view2) {
+		var view_hierarchy1 = utils.view_hierarchy(view1);
+		var view_hierarchy2 = utils.view_hierarchy(view2);
+		
+		var i;
+		for(i = 0; [view_hierarchy1[i] isEqual:view_hierarchy2[i]]; i++) {
+		}
+		
+		if(i === 0) {
+			throw 'No relation!'
+		}
+		
+		return [view_hierarchy1[i - 1], view_hierarchy1.length - i, view_hierarchy2.length - i];
+	};
+	
+	/*
+		Returns a pointer to type with a size of size * utils.sizeof(type)
+
+		Usage:
+			cy# arr = utils.makeArray(int, 4)
+			&0
+			cy# arr[1] = 100
+			100
+	*/
+	utils.makeArray = function(type, size) {
+		var mem = malloc(size * utils.sizeof(type));
+		return type.pointerTo()(mem); 
+	};
+	
+	/*
+		Returns a pointer to type initialized with val
+
+		Usage:
+			cy# ptr = utils.pointerTo(int, 1337)
+			&1337
+			cy# *ptr
+			1337
+	*/
+	utils.pointerTo = function(type, val) {
+		var mem = new type;
+		*mem = val;
+		return mem;
+	};
+
+	/*
+		Returns an array with two integers specifying
+		the CPU_TYPE and CPU_SUB_TYPE of the current running process
+		If the executable is fat, this returns the value for the active slice
+		
+		Usage:
+			cy# utils.getCpuType() // x86_64
+			[16777223,0]
+			cy# utils.getCpuType() // i368
+			[7,0]
+			cy# utils.getCpuType() // arm 32 bit
+			[12,0]
+	*/
+	utils.getCpuType = function() {
+		var mibLen = c.CTL_MAXNAME;
+		var mib = utils.makeArray(int, mibLen);
+		var mibLenPtr = utils.pointerTo(@encode(uint64_t), mibLen);
+		var err = utils.apply("sysctlnametomib", ["sysctl.proc_cputype", mib, mibLenPtr]);
+		
+		if(err !== null) {
+			free(mib);
+			free(mibLenPtr);
+			throw "Error calling sysctlnametomib!";
+		}
+		
+		mibLen = *mibLenPtr;
+		free(mibLenPtr);
+		mib[mibLen] = utils.apply("getpid", []);
+		mibLen++;
+
+		current_arch = utils.makeStruct("cpu_type_t type; cpu_subtype_t subtype;", "current_arch");
+		archType = new current_arch;
+		archTypeSizePtr = utils.pointerTo(@encode(uint64_t), utils.sizeof(current_arch));
+		err = utils.apply("sysctl", [mib, mibLen, archType, archTypeSizePtr, 0, 0]);
+		
+		free(mib);
+		free(archTypeSizePtr);
+		if(err != null) {
+			free(archType);
+			throw "Error calling sysctl!";
+		}
+		
+		var ret = [archType->type, archType->subtype];
+		free(archType);
+
+		return ret;
+	};
+	
+	/*
+		Returns a string containing the address and path to every loaded image in the process
+		
+		cy# ?expand
+		expand == true
+		cy# utils.get_dyld_info()
+		"
+		
+		"
+	*/
+	utils.get_dyld_info = function() {
+		var mach_header = utils.makeStruct("uint32_t magic; cpu_type_t cputype; cpu_subtype_t cpusubtype; uint32_t filetype; uint32_t ncmds; uint32_t sizeofcmds; uint32_t flags;", "mach_header");
+		var dyld_image_info = utils.makeStruct("const struct mach_header* imageLoadAddress; const char* imageFilePath; uintptr_t imageFileModDate;", "dyld_image_info");
+		var dyld_all_image_infos = utils.makeStruct("uint32_t version; uint32_t infoArrayCount; const struct dyld_image_info* infoArray;", "dyld_all_image_infos");
+
+		var all_image_infos = dyld_all_image_infos.pointerTo()(utils.apply("_dyld_get_all_image_infos", []));
+		var image_count = all_image_infos->infoArrayCount;
+		var info_array = all_image_infos->infoArray;
+
+		var log = "";
+
+		for(var i = 0; i < image_count; i++) {
+			var info = dyld_image_info.pointerTo()(&info_array[i]);
+			
+			log += "0x" + info->imageLoadAddress.valueOf().toString(16) + ": " + info->imageFilePath + "\n";
+		}
+		
+		return log;
+	};
+
 	if(shouldExposeConsts) {
 		for(var k in utils.constants) {
 			Cycript.all[k] = utils.constants[k];
