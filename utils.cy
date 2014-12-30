@@ -1035,9 +1035,12 @@
 	}
 
 	if(shouldExposeFuncs) {
-		for(var f in utils) {
-			if(utils.hasOwnProperty(f)) {
-				Cycript.all[f] = utils[f];
+		for(var k in utils) {
+			if(utils.hasOwnProperty(k)) {
+				var f = utils[k];
+				if(typeof f === 'function') {
+					Cycript.all[k] = f;
+				}
 			}
 		}
 	}
