@@ -124,6 +124,14 @@
 		"kern_return_t mach_vm_read(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, vm_offset_t *data, mach_msg_type_number_t *dataCnt)",
 	];
 
+	var log = system.print;
+
+	try {
+		@import org.cycript.NSLog;
+		log = x => NSLog("%@", x);
+	} catch(e) {
+	}
+
 	/*
 		Aligns the pointer downwards, aligment must be a power of 2
 		Useful for mprotect
@@ -238,6 +246,9 @@
 		var str = "exports.result = " + expression;
 
 		var handle = utils.apply("fopen", [f, "w"]);
+		if(!handle) {
+			throw "utils.exec: Couldn't write to temporary file. Is the process sandboxed?";
+		}
 		utils.apply("fwrite", [str, str.length, 1, handle]);
 		utils.apply("fclose", [handle]);
 
@@ -317,7 +328,7 @@
 				return [name, utils.exec(encodeString)];
 			}
 		} else if(load) {
-			throw "Function couldn't be found with dlsym!";
+			throw "utils.include: Function couldn't be found with dlsym!";
 		}
 
 		return [name, encodeString];
@@ -336,10 +347,10 @@
 					Cycript.all[o[0]] = o[1];
 				}
 			} catch(e) {
-				system.print("Failed to load function: ");
-				system.print(f);
+				log("Failed to load function: ");
+				log(f);
 				try {
-					system.print(utils.include(f));
+					log(utils.include(f));
 				} catch(e2) {
 
 				}
@@ -403,7 +414,7 @@
 	*/
 	utils.apply = function(fun, args) {
 		if(!(args instanceof Array)) {
-			throw "Args needs to be an array!";
+			throw "utils.apply: Args needs to be an array!";
 		}
 
 		var argc = args.length;
@@ -430,7 +441,7 @@
 		}
 
 		if(!fun) {
-			throw "Function not found!";
+			throw "utils.apply: Function not found!";
 		}
 
 		return type(fun).apply(null, args);
@@ -718,7 +729,7 @@
 		}
 
 		if(images.length === 0) {
-			throw "No images found!"
+			throw "utils.dumpImages: No images found!"
 		}
 
 		var template = utils.str2voidPtr("/tmp/cycript-images-XXXXXX");
@@ -940,7 +951,7 @@
 		if(err !== null) {
 			free(mib);
 			free(mibLenPtr);
-			throw "Error calling sysctlnametomib!";
+			throw "utils.getCpuType: Error calling sysctlnametomib!";
 		}
 
 		mibLen = *mibLenPtr;
@@ -957,7 +968,7 @@
 		free(archTypeSizePtr);
 		if(err != null) {
 			free(archType);
-			throw "Error calling sysctl!";
+			throw "utils.getCpuType: Error calling sysctl!";
 		}
 
 		var ret = [archType->type, archType->subtype];
@@ -1017,16 +1028,11 @@
 		return log;
 	};
 
-	for each(var s in structs) {
-		utils.makeStruct(s[1], s[0]);
-	}
-
 	if(shouldExposeConsts) {
 		for(var k in utils.constants) {
 			Cycript.all[k] = utils.constants[k];
 		}
 	}
-
 
 	if(shouldExposeFuncs) {
 		for(var f in utils) {
@@ -1034,6 +1040,15 @@
 				Cycript.all[f] = utils[f];
 			}
 		}
+	}
+
+	try {
+		for each(var s in structs) {
+			utils.makeStruct(s[1], s[0]);
+		}
+	} catch(e) {
+		log(e);
+		log("Failed to make structs!");
 	}
 
 	if(shouldLoadCFuncs) {
