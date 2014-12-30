@@ -339,7 +339,7 @@
 		Is automatically called if shouldLoadCFuncs is true
 	*/
 	utils.loadfuncs = function(expose) {
-		for each(var f in CFuncsDeclarations) {
+		for(var f of CFuncsDeclarations) {
 			try {
 				var o = utils.include(f, true);
 				utils.funcs[o[0]] = o[1];
@@ -736,7 +736,7 @@
 		utils.apply("mkdtemp", [template]);
 		var dir = utils.voidPtr2str(template);
 
-		for each(var i in images) {
+		for(var i of images) {
 			data = [i TIFFRepresentation];
 			[data writeToFile:dir + "/0x" + utils.getPointer(i).toString(16) + ".tiff" atomically:YES];
 		}
@@ -1046,7 +1046,7 @@
 	}
 
 	try {
-		for each(var s in structs) {
+		for(var s of structs) {
 			utils.makeStruct(s[1], s[0]);
 		}
 	} catch(e) {
