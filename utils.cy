@@ -100,6 +100,7 @@
 		["mach_header", "uint32_t magic; cpu_type_t cputype; cpu_subtype_t cpusubtype; uint32_t filetype; uint32_t ncmds; uint32_t sizeofcmds; uint32_t flags;"],
 		["dyld_image_info", "const struct mach_header* imageLoadAddress; const char* imageFilePath; uintptr_t imageFileModDate;"],
 		["dyld_all_image_infos", "uint32_t version; uint32_t infoArrayCount; const struct dyld_image_info* infoArray;"],
+		["Dl_info", "const char *dli_fname; void *dli_fbase; const char *dli_sname; void *dlisaddr;"],
 	];
 
 	// C functions that utils.loadfuncs loads
@@ -122,6 +123,8 @@
 		"kern_return_t mach_vm_protect(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection)",
 		"kern_return_t mach_vm_write(vm_map_t target_task, mach_vm_address_t address, vm_offset_t data, mach_msg_type_number_t dataCnt)",
 		"kern_return_t mach_vm_read(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, vm_offset_t *data, mach_msg_type_number_t *dataCnt)",
+		// <dlfcn.h>
+		"int dladdr(const void* addr, Dl_info* info);",
 	];
 
 	var log = system.print;
@@ -146,7 +149,38 @@
 
 		low = (low & ~(alignment - 1));
 
+		if(low < 0) {
+			low = Math.pow(2, 32) + low;
+		}
+
 		return low + high * Math.pow(2, 32);
+	};
+
+	/*
+		Sets the protection of the memory starting at addr
+		with length len, to prot
+
+		Example:
+			cy# var foo = new int;
+			&0
+			cy# utils.mprotect(foo.valueOf(),
+			                   foo.type.size,
+							   utils.constants.PROT_READ)
+			cy# *a = 1
+			*** _assert(CYRecvAll(client, &size, sizeof(size))):../Console.cpp(142):Run
+	*/
+	utils.mprotect = function(addr, len, prot) {
+		addr = utils.getPointer(addr);
+
+		var pagesize = utils.apply("getpagesize", []);
+
+		var aligned = utils.align(addr, pagesize);
+
+		var mprotect_size = addr - aligned + len;
+
+		if(utils.apply("mprotect", [aligned, mprotect_size, prot])) {
+			throw "mprotect failed.";
+		}
 	};
 
 	/*
@@ -358,6 +392,10 @@
 		}
 	};
 
+	utils.hex = function(ptr) {
+		return '0x' + utils.getPointer(ptr).toString(16);
+	};
+
 	/*
 		Logs a specific message sent to an instance of a class like logify.pl in theos
 		Requires Cydia Substrate (com.saurik.substrate.MS) and NSLog (org.cycript.NSLog) modules
@@ -400,6 +438,69 @@
 		}, oldm);
 
 		return oldm;
+	};
+
+	/*
+		Similar to utils.logify, but for functions instead of messages
+
+		Example:
+			cy# logifyFunc("fopen", 2);
+			...
+			cy# apply("fopen", ["/etc/passwd", "r"]);
+			2015-01-14 07:01:08.009 cycript[55326:2042054] fopen(0x10040d4cc, 0x10040d55c)
+			2015-01-14 07:01:08.010 cycript[55326:2042054]  = 0x7fff754fc070
+			0x7fff754fc070
+	*/
+
+	utils.logifyFunc = function(nameOrPointer, argCount) {
+		@import com.saurik.substrate.MS;
+		@import org.cycript.NSLog;
+
+		var name = "" + nameOrPointer;
+
+		var ptr = nameOrPointer;
+		if(typeof nameOrPointer === "string") {
+			ptr = dlsym(RTLD_DEFAULT, nameOrPointer);
+			if(!ptr) {
+				throw "Couldn't find function with name using dlsym!";
+			}
+		}
+
+		var oldf = {};
+		var f = function() {
+			var logFormat = "%@(";
+			for(var i = 0; i < arguments.length; i++) {
+				logFormat += (i > 0? ", ": "") + "%@";
+			}
+			logFormat += ")";
+
+			var args = [].slice.call(arguments);
+
+			args = args.map(utils.hex);
+
+			NSLog.apply(null, [logFormat, name].concat(args));
+
+			var r = (*oldf).apply(null, arguments);
+
+			if(r !== undefined) {
+				NSLog(" = %@", utils.hex(r));
+			}
+
+			return r;
+		};
+
+		var voidPtr = @encode(void *);
+		var argTypes = [];
+
+		for(var i = 0; i < argCount; i++) {
+			argTypes.push(voidPtr);
+		}
+
+		var fType = voidPtr.functionWith.apply(voidPtr, argTypes);
+
+		MS.hookFunction(fType(ptr), fType(f), oldf);
+
+		return oldf;
 	};
 
 	/*
@@ -1026,6 +1127,190 @@
 		}
 
 		return log;
+	};
+
+	/*
+		Returns a string of hexpairs representing the memory
+		starting at addr with length len
+
+		Example:
+			cy# var foo = new int;
+			cy# *foo = 0x12345678
+			305419896
+			cy# utils.gethex(foo, foo.type.size)
+			"78563412"
+	*/
+	utils.gethex = function(addr, len) {
+		addr = utils.getPointer(addr);
+
+		var res = "";
+
+		var p = @encode(uint8_t *)(addr);
+
+		for(var i = 0; i < len; i++) {
+			res += utils.hexpad(p[i], 1);
+		}
+
+		return res;
+	};
+
+	/*
+		Returns a hexdump of a memory range with similar format as xxd
+
+		Example:
+			cy# var foo = new int;
+			cy# *foo = 0x12345678
+			305419896
+			cy# ?expand
+			expand == true
+			cy# utils.hexdump(foo, foo.type.size)
+			"
+			01005015a0:	78 56 34 12 	xV4.
+			"
+	*/
+	utils.hexdump = function(addr, len, bytes_per_line) {
+		addr = utils.getPointer(addr);
+
+		if(!len) {
+			len = 0x100;
+		}
+
+		if(!bytes_per_line) {
+			bytes_per_line = 0x10;
+		}
+
+		function isprint(c) {
+			return 0x20 <= c && c <= 0x7E;
+		}
+
+		var p = @encode(uint8_t *)(addr);
+		var res = "\n";
+
+		var addr_len = Math.ceil((addr + len - 1).toString(16).length / 2);
+
+		for(var i = 0; i < len; i += bytes_per_line) {
+			var cols = [utils.hexpad(addr + i, addr_len) + ":", "", ""];
+
+			for(var j = i; j < i + bytes_per_line && j < len; j++) {
+				var n = p[j];
+				cols[1] += utils.hexpad(n, 1) + " ";
+				cols[2] += isprint(n)? String.fromCharCode(n): ".";
+			}
+
+			res += cols.join("\t") + "\n";
+		}
+
+		return res;
+	};
+
+	function getRasm2Args(addr) {
+		addr = utils.getPointer(addr);
+
+		var cpuType = utils.getCpuType();
+
+		var bits = "32";
+		if(cpuType[0] & c.CPU_ARCH_ABI64) {
+			bits = "64";
+		}
+
+		var arch;
+		if(cpuType[0] & c.CPU_TYPE_X86) {
+			arch = "x86";
+		} else if(cpuType[0] & c.CPU_TYPE_ARM) {
+			arch = "arm";
+		} else {
+			throw "Unknown arch for cpu: " + cpuType.join(", ");
+		}
+
+		var args = ["-a", arch, "-b", bits, "-o", addr.toString()];
+		return args;
+	}
+
+	function getRasm2Output(args) {
+		var rasm2_path = utils.getOutputFromTask("/bin/bash", ["-c", "which rasm2"]).trim();
+
+		if(!rasm2_path) {
+			throw "rasm2 command not found in /bin/bash's $PATH";
+		}
+
+		return utils.getOutputFromTask(rasm2_path, args);
+	}
+
+	/*
+		Disassembles a memory range using rasm2
+
+		Example:
+			cy# ?expand
+			expand == true
+			cy# var method = class_getInstanceMethod(NSNumber,
+			                 @selector(intValue));
+			...
+			cy# var imp = method_getImplementation(method);
+			...
+			cy# utils.disasm(imp, 10)
+			"
+			0x7fff83363b8c   1                       55  push rbp
+			0x7fff83363b8d   3                   4889e5  mov rbp, rsp
+			0x7fff83363b90   2                     4157  push r15
+			0x7fff83363b92   2                     4156  push r14
+			0x7fff83363b94   2                     4155  push r13
+			"
+	*/
+	utils.disasm = function(addr, len) {
+		addr = utils.getPointer(addr);
+
+		if(!len) {
+			len = 0x40;
+		}
+
+		var args = getRasm2Args(addr);
+
+		var hex = utils.gethex(addr, len);
+		args.push("-D", hex);
+
+		return "\n" + getRasm2Output(args);
+	};
+
+	/*
+		Assembles some instructions to a memory address using rasm2
+
+		Example:
+			cy# var n = [NSNumber numberWithInt:10]
+			@10
+			cy# [n intValue]
+			10
+			cy# var method = class_getInstanceMethod([n class],
+			                 @selector(intValue));
+			...
+			cy# var imp = method_getImplementation(method);
+			...
+			cy# utils.asm(imp, 'mov eax, 42; ret;')
+			6
+			cy# [n intValue]
+			42
+	*/
+	utils.asm = function(addr, ins) {
+		addr = utils.getPointer(addr);
+
+		var args = getRasm2Args(addr);
+
+		args.push("--", ins);
+
+		var output = getRasm2Output(args).trim();
+
+		if(!output) {
+			throw "Couldn't assemble instructions with rasm2.";
+		}
+
+		utils.mprotect(addr, output.length / 2, c.PROT_READ | c.PROT_WRITE | c.PROT_EXEC);
+
+		var p = @encode(uint8_t *)(addr);
+
+		for(var i = 0; i < output.length; i += 2) {
+			p[i / 2] = parseInt(output[i] + output[i + 1], 16);
+		}
+
+		return output.length / 2;
 	};
 
 	if(shouldExposeConsts) {
