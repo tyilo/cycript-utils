@@ -1,139 +1,36 @@
 (function(utils) {
-	// Load C functions declared in CFuncsDeclarations
-	var shouldLoadCFuncs = true;
-	// Expose the C functions to cycript's global scope
-	var shouldExposeCFuncs = true;
 	// Expose C constants to cycript's global scope
 	var shouldExposeConsts = true;
 	// Expose functions defined here (in utils) to cycript's global scope
-	var shouldExposeFuncs = true;
-
-	utils.funcs = {};
+	var shouldExposeFuncs = true
 
 	// Various constants
 	utils.constants = {
-		// <sys/mman.h>
-		PROT_NONE:  0x0,
-		PROT_READ:  0x1,
-		PROT_WRITE: 0x2,
-		PROT_EXEC:  0x4,
 		// <sys/sysctl.h>
 		CTL_MAXNAME: 12,
-		// <mach/vm_prot.h>
-		VM_PROT_NONE:       0x0,
-		VM_PROT_READ:       0x1,
-		VM_PROT_WRITE:      0x2,
-		VM_PROT_EXECUTE:    0x4,
-		VM_PROT_NO_CHANGE:  0x8,
-		VM_PROT_COPY:       0x10,
-		VM_PROT_WANTS_COPY: 0x10,
-		VM_PROT_IS_MASK:    0x40,
-		// <mach-o/loader.h>
-		MH_MAGIC:    0xfeedface,
-		MH_CIGAM:    0xcefaedfe,
-		MH_MAGIC_64: 0xfeedfacf,
-		MH_CIGAM_64: 0xcffaedfe,
 		// <mach/machine.h>
-		CPU_ARCH_ABI64: 0x01000000,
+		// These are builtin in cycript, but they are broken
 		CPU_TYPE_X86: 7,
 		CPU_TYPE_ARM: 12,
 	};
 
 	var c = utils.constants;
-	c.VM_PROT_DEFAULT = c.VM_PROT_READ | c.VM_PROT_WRITE;
-	c.VM_PROT_ALL =     c.VM_PROT_READ | c.VM_PROT_WRITE | c.VM_PROT_EXECUTE;
 
 	c.CPU_TYPE_X86_64 = c.CPU_TYPE_X86 | c.CPU_ARCH_ABI64;
 	c.CPU_TYPE_ARM64 = c.CPU_TYPE_ARM | c.CPU_ARCH_ABI64;
 
-	c.NSUTF8StringEncoding = 4;
+	// Capital D
+	$cysDl_info = (struct dl_info);
 
-	// Typedefs (always exposed)
-	// <stdlib.h>
-	typedef unsigned long size_t;
+	extern "C" mach_port_t mach_task_self();
 
-	// <stdio.h>
-	typedef void FILE;
+	extern "C" size_t malloc_size(const void *);
+	extern "C" struct dyld_all_image_infos *_dyld_get_all_image_infos();
 
-	// <stdint.h>
-	typedef unsigned long uintptr_t;
-	typedef long intptr_t;
+	extern "C" int sysctl(int *, u_int, void *, size_t *, void *, size_t);
+	extern "C" int sysctlnametomib(const char *, int *, size_t *);
 
-	// <mach/mach.h>
-	typedef int kern_return_t;
-	typedef int natural_t;
-	typedef int integer_t;
-
-	typedef natural_t mach_port_name_t;
-	typedef mach_port_name_t mach_port_t;
-
-	typedef natural_t vm_offset_t;
-	typedef natural_t vm_size_t;
-
-	typedef uint64_t mach_vm_address_t;
-	typedef uint64_t mach_vm_offset_t;
-	typedef uint64_t mach_vm_size_t;
-
-	typedef uint64_t vm_map_offset_t;
-	typedef uint64_t vm_map_address_t;
-	typedef uint64_t vm_map_size_t;
-
-	typedef mach_vm_address_t mach_port_context_t;
-
-	typedef mach_port_t vm_map_t;
-	typedef int vm_prot_t;
-	typedef natural_t mach_msg_type_number_t;
-
-	typedef integer_t cpu_type_t;
-	typedef integer_t cpu_subtype_t;
-	typedef integer_t cpu_threadtype_t;
-
-	if(@encode(void *).size == 8) {
-		typedef unsigned int boolean_t;
-	} else {
-		typedef int boolean_t;
-	}
-
-	// Structs to be made with utils.makeStruct
-	// Always exposed
-	var structs = [
-		["mach_header", "uint32_t magic; cpu_type_t cputype; cpu_subtype_t cpusubtype; uint32_t filetype; uint32_t ncmds; uint32_t sizeofcmds; uint32_t flags;"],
-		["dyld_image_info", "const struct mach_header* imageLoadAddress; const char* imageFilePath; uintptr_t imageFileModDate;"],
-		["dyld_all_image_infos", "uint32_t version; uint32_t infoArrayCount; const struct dyld_image_info* infoArray;"],
-		["Dl_info", "const char *dli_fname; void *dli_fbase; const char *dli_sname; void *dlisaddr;"],
-	];
-
-	// C functions that utils.loadfuncs loads
-	var CFuncsDeclarations = [
-		// <stdlib.h>
-		"void *calloc(size_t num, size_t size)",
-		// <string.h>
-		"char *strcpy(char *restrict dst, const char *restrict src)",
-		"char *strdup(const char *s1)",
-		"void *memset(void *dest, int ch, size_t count)",
-		"void *memcpy(void *dest, const void *src, size_t count)",
-		// <stdio.h>
-		"FILE *fopen(const char *, const char *)",
-		"int fclose(FILE *)",
-		"size_t fread(void *restrict, size_t, size_t, FILE *restrict)",
-		"size_t fwrite(const void *restrict, size_t, size_t, FILE *restrict)",
-		// <mach.h>
-		"mach_port_t mach_task_self()",
-		"kern_return_t task_for_pid(mach_port_name_t target_tport, int pid, mach_port_name_t *tn)",
-		"kern_return_t mach_vm_protect(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection)",
-		"kern_return_t mach_vm_write(vm_map_t target_task, mach_vm_address_t address, vm_offset_t data, mach_msg_type_number_t dataCnt)",
-		"kern_return_t mach_vm_read(vm_map_t target_task, mach_vm_address_t address, mach_vm_size_t size, vm_offset_t *data, mach_msg_type_number_t *dataCnt)",
-		// <dlfcn.h>
-		"int dladdr(const void* addr, Dl_info* info);",
-	];
-
-	var log = system.print;
-
-	try {
-		@import org.cycript.NSLog;
-		log = x => NSLog("%@", x);
-	} catch(e) {
-	}
+	var log = x => NSLog(@"%s", x.toString());
 
 	/*
 		Aligns the pointer downwards, aligment must be a power of 2
@@ -172,13 +69,13 @@
 	utils.mprotect = function(addr, len, prot) {
 		addr = utils.getPointer(addr);
 
-		var pagesize = utils.apply("getpagesize", []);
+		var pagesize = getpagesize();
 
 		var aligned = utils.align(addr, pagesize);
 
 		var mprotect_size = addr - aligned + len;
 
-		if(utils.apply("mprotect", [aligned, mprotect_size, prot])) {
+		if(mprotect(aligned, mprotect_size, prot)) {
 			throw "mprotect failed.";
 		}
 	};
@@ -194,53 +91,14 @@
 		return Object.keys(obj).map(o => obj[o]);
 	};
 
-	var libdir = "/usr/lib/cycript0.9";
-
-	function getTmpDir() {
-		var dir = libdir + "/tmp";
-
-		utils.apply("mkdir", [dir, 0777]);
-
-		return dir;
-	}
-
-	function requireFile(path) {
-		return require(path.replace(libdir + "/", "").replace(/.cy$/, ""));
-	}
-
-	/*
-		Reloads this file into cycript for development purposes
-
-		Example:
-			cy# new_utils = utils.reloadUtils(); 0
-			0
-			cy# new_utils == utils
-			false
-	*/
-	utils.reloadUtils = function() {
-		var tmpdir = getTmpDir();
-
-		var template = utils.str2voidPtr(tmpdir + "/XXXXXXXX");
-		utils.apply("mkdtemp", [template]);
-
-		var f = utils.voidPtr2str(template) + "/utils.cy";
-		utils.apply("symlink", [libdir + "/com/tyilo/utils.cy", f]);
-
-		var new_utils = requireFile(f);
-
-		utils.apply("unlink", [f]);
-		utils.apply("rmdir", [template]);
-
-		return new_utils;
-	};
 
 	/*
 		Runs an external program with arguments
 		Returns the program's stdout
 
 		Example:
-			cy# utils.getOutputFromTask("/bin/date", ["+%s"])
-			@"1419918861\n"
+				cy# utils.getOutputFromTask("/bin/date", ["+%s"])
+				@"1419918861\n"
 	*/
 	utils.getOutputFromTask = function(path, args) {
 		var task = [new NSTask init];
@@ -257,141 +115,6 @@
 		return [new NSString initWithData:data encoding:c.NSUTF8StringEncoding];
 	};
 
-	/*
-		Replacement for eval that can handle @encode etc.
-
-		Example:
-			cy# utils.exec("@encode(void *(int, char))")
-			@encode(void*(int,char))
-	*/
-	utils.exec = function(expression) {
-		var dir = getTmpDir();
-
-		var template = utils.str2voidPtr(dir + "/exec-XXXXXXXX.cy");
-
-		utils.apply("mkstemps", [template, 3]);
-		var f = utils.voidPtr2str(template);
-		free(template);
-
-		if(!f) {
-			return false;
-		}
-
-		var str = "exports.result = " + expression;
-
-		var handle = utils.apply("fopen", [f, "w"]);
-		if(!handle) {
-			throw "utils.exec: Couldn't write to temporary file. Is the process sandboxed?";
-		}
-		utils.apply("fwrite", [str, str.length, 1, handle]);
-		utils.apply("fclose", [handle]);
-
-		var r;
-		var except = null;
-		try {
-			r = requireFile(f);
-		} catch(e) {
-			except = e;
-		}
-
-		utils.apply("unlink", [f]);
-
-		if(except !== null) {
-			throw except;
-		}
-
-		return r.result;
-	};
-
-	/*
-		Fixes types for use with @encode
-		Replaces "struct" and "restrict" by nothing, as Cycript doesn't support these
-		Used in utils.include, utils. and utils.makeStruct
-
-		Example:
-			cy# utils.fixType("struct mach_header")
-			"mach_header"
-			cy# utils.fixType("void *restrict")
-			"void *"
-	*/
-	utils.fixType = function(str) {
-		return str.replace(/struct|restrict/g, "");
-	};
-
-	/*
-		Parses a C function declaration and returns the function name and cycript type
-		If load is true, tries to load it into cycript using utils.exec
-
-		Example:
-			cy# var str = "void *calloc(size_t num, size_t size)";
-			"void *calloc(size_t num, size_t size)"
-			cy# utils.include(str)
-			["calloc","@encode(void *(uint64_t num,  uint64_t size))(140735674376857)"]
-			cy# var ret = utils.include(str, true)
-			["calloc",0x7fff93e0e299]
-			cy# ret[1].type
-			@encode(void*(unsigned long long int,unsigned long long int))
-			cy# ret[1](100, 1)
-			0x100444100
-	*/
-	utils.include = function(str, load) {
-		var re = /^\s*([^(]*(?:\s+|\*))(\w*)\s*\(([^)]*)\)\s*;?\s*$/;
-		var match = re.exec(str);
-		if(!match) {
-			return -1;
-		}
-		var rType = utils.fixType(match[1]);
-		var name = match[2];
-		var args = match[3];
-
-		var argsRe = /([^,]+)(?:,|$)/g;
-		var argsTypes = [];
-		while((match = argsRe.exec(args)) !== null) {
-			var type = utils.fixType(match[1]);
-			argsTypes.push(type);
-		}
-
-		var encodeString = "@encode(";
-		encodeString += rType + "(";
-		encodeString += argsTypes.join(", ") + "))";
-
-		var fun = dlsym(RTLD_DEFAULT, name);
-		if(fun !== null) {
-			encodeString += "(" + fun + ")";
-			if(load) {
-				return [name, utils.exec(encodeString)];
-			}
-		} else if(load) {
-			throw "utils.include: Function couldn't be found with dlsym!";
-		}
-
-		return [name, encodeString];
-	};
-
-	/*
-		Loads the function declaration in the defs array using utils.exec and exposes to cycript's global scope
-		Is automatically called if shouldLoadCFuncs is true
-	*/
-	utils.loadfuncs = function(expose) {
-		for(var f of CFuncsDeclarations) {
-			try {
-				var o = utils.include(f, true);
-				utils.funcs[o[0]] = o[1];
-				if(expose) {
-					Cycript.all[o[0]] = o[1];
-				}
-			} catch(e) {
-				log("Failed to load function: ");
-				log(f);
-				try {
-					log(utils.include(f));
-				} catch(e2) {
-
-				}
-			}
-		}
-	};
-
 	utils.hex = function(ptr) {
 		return '0x' + utils.getPointer(ptr).toString(16);
 	};
@@ -404,7 +127,7 @@
 		FIXME: For certain combinations of arguments, the process will crash
 
 		Example:
-			cy# var oldm = utils.logify(objc_getMetaClass(NSNumber), @selector(numberWithDouble:))
+			cy# var oldm = utils.logify(object_getClass(NSNumber), @selector(numberWithDouble:))
 			...
 			cy# var n = [NSNumber numberWithDouble:1.5]
 			2014-07-28 02:26:39.805 cycript[71213:507] +[<NSNumber: 0x10032d0c4> numberWithDouble:1.5]
@@ -413,25 +136,24 @@
 	*/
 	utils.logify = function(cls, sel) {
 		@import com.saurik.substrate.MS;
-		@import org.cycript.NSLog;
+
+		var selFormat = sel.toString().replace(/:/g, ":%s ").trim();
+		var logFormat = @"%s[<%@: %p> " + selFormat + "]";
 
 		var oldm = {};
 
 		MS.hookMessage(cls, sel, function() {
-			var args = [].slice.call(arguments);
+			var args = [logFormat, class_isMetaClass(cls)? "+": "-", cls, (typedef void *)(this)];
+			for (arg of arguments) {
+				args.push(arg.toString());
+			}
 
-			var selFormat = sel.toString().replace(/:/g, ":%@ ").trim();
-			var logFormat = "%@[<%@: 0x%@> " + selFormat + "]";
-
-			var standardArgs = [logFormat, class_isMetaClass(cls)? "+": "-", cls.toString(), (&this).valueOf().toString(16)];
-			var logArgs = standardArgs.concat(args);
-
-			NSLog.apply(null, logArgs);
+			NSLog.apply(null, args);
 
 			var r = oldm->apply(this, arguments);
 
 			if(r !== undefined) {
-				NSLog(" = %@", r);
+				NSLog(@" = %s", r.toString());
 			}
 
 			return r;
@@ -454,7 +176,6 @@
 
 	utils.logifyFunc = function(nameOrPointer, argCount) {
 		@import com.saurik.substrate.MS;
-		@import org.cycript.NSLog;
 
 		var name = "" + nameOrPointer;
 
@@ -468,28 +189,29 @@
 
 		var oldf = {};
 		var f = function() {
-			var logFormat = "%@(";
+			var logFormat = @"%s(";
 			for(var i = 0; i < arguments.length; i++) {
-				logFormat += (i > 0? ", ": "") + "%@";
+				logFormat += (i > 0? ", ": "") + "%s";
 			}
 			logFormat += ")";
 
-			var args = [].slice.call(arguments);
-
-			args = args.map(utils.hex);
+			var args = [];
+			for (var arg of arguments) {
+				args.push(utils.hex(arg));
+			}
 
 			NSLog.apply(null, [logFormat, name].concat(args));
 
 			var r = (*oldf).apply(null, arguments);
 
 			if(r !== undefined) {
-				NSLog(" = %@", utils.hex(r));
+				NSLog(@" = %s", utils.hex(r));
 			}
 
 			return r;
 		};
 
-		var voidPtr = @encode(void *);
+		var voidPtr = (typedef void *);
 		var argTypes = [];
 
 		for(var i = 0; i < argCount; i++) {
@@ -519,17 +241,17 @@
 		}
 
 		var argc = args.length;
-		var voidPtr = @encode(void *);
+		var voidPtr = (typedef void *);
 		var argTypes = [];
 		for(var i = 0; i < argc; i++) {
 			var argType = voidPtr;
 
 			var arg = args[i];
 			if(typeof arg === "string") {
-				argType = @encode(char *);
+				argType = (typedef char *);
 			}
 			if(typeof arg === "number" && arg % 1 !== 0) {
-				argType = @encode(double);
+				argType = (typedef double);
 			}
 
 			argTypes.push(argType);
@@ -559,16 +281,14 @@
 			"foobar"
 	*/
 	utils.str2voidPtr = function(str) {
-		var strdup = @encode(void *(char *))(dlsym(RTLD_DEFAULT, "strdup"));
-		return strdup(str);
+		return (typedef void *)(strdup(str));
 	};
 
 	/*
 		The inverse function of str2voidPtr
 	*/
 	utils.voidPtr2str = function(voidPtr) {
-		var strdup = @encode(char *(void *))(dlsym(RTLD_DEFAULT, "strdup"));
-		return strdup(voidPtr);
+		return (typedef char *)(p).toString()
 	};
 
 	/*
@@ -585,7 +305,7 @@
 		var doublePtr = new double;
 		*doublePtr = n;
 
-		var voidPtrPtr = @encode(void **)(doublePtr);
+		var voidPtrPtr = (typedef void **)(doublePtr);
 
 		return *voidPtrPtr;
 	};
@@ -594,10 +314,10 @@
 		The inverse function of double2voidPtr
 	*/
 	utils.voidPtr2double = function(voidPtr) {
-		var voidPtrPtr = new @encode(void **);
+		var voidPtrPtr = new (typedef void **);
 		*voidPtrPtr = voidPtr;
 
-		var doublePtr = @encode(double *)(voidPtrPtr);
+		var doublePtr = (typedef double *)(voidPtrPtr);
 
 		return *doublePtr;
 	};
@@ -620,12 +340,12 @@
 			return true;
 		}
 
-		var fds = new @encode(int [2]);
-		utils.apply("pipe", [fds]);
-		var result = utils.apply("write", [fds[1], ptr, 1]) == 1;
+		var fds = new (typedef int[2]);
+		pipe(fds);
+		var result = write(fds[1], ptr, 1) == 1;
 
-		utils.apply("close", [fds[0]]);
-		utils.apply("close", [fds[1]]);
+		close(fds[0]);
+		close(fds[1]);
 
 		return result;
 	};
@@ -649,7 +369,7 @@
 			return 0;
 		}
 
-		var p = @encode(void *)(obj);
+		var p = (typedef void *)(obj);
 
 		if(p === null) {
 			return null;
@@ -766,49 +486,10 @@
 			return false;
 		}
 
-		var msize = utils.apply("malloc_size", [ptr]);
+		var msize = malloc_size(ptr);
 		var isize = class_getInstanceSize(new Instance(c));
 
 		return msize >= isize;
-	};
-
-	/*
-		Creates a cycript struct type from a C struct definition
-
-		Example:
-			cy# var foo = makeStruct("int a; short b; char c; uint64_t d; double e;", "foo");
-			@encode(foo)
-			cy# var f = new foo
-			&{a:0,b:0,c:0,d:0,e:0}
-			cy# f->a = 100; f
-			&{a:100,b:0,c:0,d:0,e:0}
-			cy# *@encode(int *)(f)
-			100
-	*/
-	utils.makeStruct = function(str, name) {
-		var fieldRe = /(?:\s|\n)*([^;]+\s*(?:\s|\*))([^;]+)\s*;/g;
-
-		var hasname = !!name;
-		if(!hasname) {
-			name = "_unnamed_struct" + Math.floor(Math.random() * 100000);
-		}
-		var typeStr = "{" + name + "=";
-
-		while((match = fieldRe.exec(str)) !== null) {
-			var fieldType = utils.fixType(match[1]);
-			var fieldName = match[2];
-			var encodedType = utils.exec("@encode(" + fieldType + ")").toString();
-
-			typeStr += '"' + fieldName + '"' + encodedType;
-		}
-
-		typeStr += "}";
-
-		var t = new Type(typeStr);
-		if(hasname) {
-			Cycript.all[name] = t;
-		}
-		return t;
 	};
 
 	/*
@@ -834,7 +515,7 @@
 		}
 
 		var template = utils.str2voidPtr("/tmp/cycript-images-XXXXXX");
-		utils.apply("mkdtemp", [template]);
+		mkdtemp(template);
 		var dir = utils.voidPtr2str(template);
 
 		for(var i of images) {
@@ -1002,35 +683,6 @@
 	};
 
 	/*
-		Returns a pointer to type with a size of size * type.size
-
-		Example:
-			cy# var arr = utils.makeArray(int, 4)
-			&0
-			cy# arr[1] = 100
-			100
-	*/
-	utils.makeArray = function(type, size) {
-		var mem = malloc(size * type.size);
-		return type.pointerTo()(mem);
-	};
-
-	/*
-		Returns a pointer to type initialized with val
-
-		Example:
-			cy# var ptr = utils.pointerTo(int, 1337)
-			&1337
-			cy# *ptr
-			1337
-	*/
-	utils.pointerTo = function(type, val) {
-		var mem = new type;
-		*mem = val;
-		return mem;
-	};
-
-	/*
 		Returns an array with two integers specifying
 		the CPU_TYPE and CPU_SUB_TYPE of the current running process
 		If the executable is fat, this returns the value for the active slice
@@ -1045,37 +697,28 @@
 	*/
 	utils.getCpuType = function() {
 		var mibLen = c.CTL_MAXNAME;
-		var mib = utils.makeArray(int, mibLen);
-		var mibLenPtr = utils.pointerTo(uint64_t, mibLen);
-		var err = utils.apply("sysctlnametomib", ["sysctl.proc_cputype", mib, mibLenPtr]);
+		var mib = new (typedef int[mibLen]);
+		var mibLenPtr = new uint64_t(mibLen);
+		var err = sysctlnametomib("sysctl.proc_cputype", mib, mibLenPtr);
 
-		if(err !== null) {
-			free(mib);
-			free(mibLenPtr);
+		if(err !== 0) {
 			throw "utils.getCpuType: Error calling sysctlnametomib!";
 		}
 
 		mibLen = *mibLenPtr;
-		free(mibLenPtr);
-		mib[mibLen] = utils.apply("getpid", []);
+		(*mib)[mibLen] = getpid();
 		mibLen++;
 
-		current_arch = utils.makeStruct("cpu_type_t type; cpu_subtype_t subtype;");
-		archType = new current_arch;
-		archTypeSizePtr = utils.pointerTo(uint64_t, current_arch.size);
-		err = utils.apply("sysctl", [mib, mibLen, archType, archTypeSizePtr, 0, 0]);
+		var current_arch = (typedef struct {cpu_type_t type; cpu_subtype_t subtype;});
+		var archType = new current_arch;
+		var archTypeSizePtr = new uint64_t(current_arch.size);
+		err = sysctl(mib, mibLen, archType, archTypeSizePtr, 0, 0);
 
-		free(mib);
-		free(archTypeSizePtr);
-		if(err != null) {
-			free(archType);
+		if(err !== 0) {
 			throw "utils.getCpuType: Error calling sysctl!";
 		}
 
-		var ret = [archType->type, archType->subtype];
-		free(archType);
-
-		return ret;
+		return [archType->type, archType->subtype];
 	};
 
 	/*
@@ -1113,17 +756,17 @@
 			..."
 	*/
 	utils.get_dyld_info = function() {
-		var all_image_infos = dyld_all_image_infos.pointerTo()(utils.apply("_dyld_get_all_image_infos", []));
+		var all_image_infos = _dyld_get_all_image_infos();
 		var image_count = all_image_infos->infoArrayCount;
 		var info_array = all_image_infos->infoArray;
 
 		var log = "";
 
 		for(var i = 0; i < image_count; i++) {
-			var info = dyld_image_info.pointerTo()(&info_array[i]);
+			var info = info_array[i];
 
-			var base = info->imageLoadAddress.valueOf();
-			log += "\n0x" + utils.hexpad(base, @encode(void *).size) + ": " + info->imageFilePath;
+			var base = info.imageLoadAddress.valueOf();
+			log += "\n0x" + utils.hexpad(base, @encode(void *).size) + ": " + info.imageFilePath;
 		}
 
 		return log;
@@ -1137,7 +780,7 @@
 			cy# var foo = new int;
 			cy# *foo = 0x12345678
 			305419896
-			cy# utils.gethex(foo, foo.type.size)
+			cy# utils.gethex(foo, 4)
 			"78563412"
 	*/
 	utils.gethex = function(addr, len) {
@@ -1145,7 +788,7 @@
 
 		var res = "";
 
-		var p = @encode(uint8_t *)(addr);
+		var p = (typedef uint8_t *)(addr);
 
 		for(var i = 0; i < len; i++) {
 			res += utils.hexpad(p[i], 1);
@@ -1163,7 +806,7 @@
 			305419896
 			cy# ?expand
 			expand == true
-			cy# utils.hexdump(foo, foo.type.size)
+			cy# utils.hexdump(foo, 4)
 			"
 			01005015a0:	78 56 34 12 	xV4.
 			"
@@ -1183,7 +826,7 @@
 			return 0x20 <= c && c <= 0x7E;
 		}
 
-		var p = @encode(uint8_t *)(addr);
+		var p = (typedef uint8_t *)(addr);
 		var res = "\n";
 
 		var addr_len = Math.ceil((addr + len - 1).toString(16).length / 2);
@@ -1209,7 +852,7 @@
 		var cpuType = utils.getCpuType();
 
 		var bits = "32";
-		if(cpuType[0] & c.CPU_ARCH_ABI64) {
+		if(cpuType[0] & CPU_ARCH_ABI64) {
 			bits = "64";
 		}
 
@@ -1275,18 +918,17 @@
 		Assembles some instructions to a memory address using rasm2
 
 		Example:
-			cy# var n = [NSNumber numberWithInt:10]
+			cy# var n = [NSNumber numberWithLongLong:10]
 			@10
 			cy# [n intValue]
 			10
-			cy# var method = class_getInstanceMethod([n class],
-			                 @selector(intValue));
+			cy# var method = class_getInstanceMethod([n class], @selector(longLongValue));
 			...
 			cy# var imp = method_getImplementation(method);
 			...
 			cy# utils.asm(imp, 'mov eax, 42; ret;')
 			6
-			cy# [n intValue]
+			cy# [n longLongValue]
 			42
 	*/
 	utils.asm = function(addr, ins) {
@@ -1302,7 +944,7 @@
 			throw "Couldn't assemble instructions with rasm2.";
 		}
 
-		utils.mprotect(addr, output.length / 2, c.PROT_READ | c.PROT_WRITE | c.PROT_EXEC);
+		utils.mprotect(addr, output.length / 2, PROT_READ | PROT_WRITE | PROT_EXEC);
 
 		var p = @encode(uint8_t *)(addr);
 
@@ -1328,18 +970,5 @@
 				}
 			}
 		}
-	}
-
-	try {
-		for(var s of structs) {
-			utils.makeStruct(s[1], s[0]);
-		}
-	} catch(e) {
-		log(e);
-		log("Failed to make structs!");
-	}
-
-	if(shouldLoadCFuncs) {
-		utils.loadfuncs(shouldExposeCFuncs);
 	}
 })(exports);
