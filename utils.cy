@@ -562,7 +562,7 @@
 	}
 
 	/*
-		Recusirvely finds all subviews satisfying a predicate
+		Recursively finds all subviews satisfying a predicate
 		By default returns all subviews from the app's keyWindow
 
 		Example:
