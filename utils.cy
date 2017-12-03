@@ -33,7 +33,7 @@
 	var log = x => NSLog(@"%s", x.toString());
 
 	/*
-		Aligns the pointer downwards, aligment must be a power of 2
+		Aligns the pointer downwards, alignment must be a power of 2
 		Useful for mprotect
 
 		Example:
