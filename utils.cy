@@ -2,7 +2,7 @@
 	// Expose C constants to cycript's global scope
 	var shouldExposeConsts = true;
 	// Expose functions defined here (in utils) to cycript's global scope
-	var shouldExposeFuncs = true
+	var shouldExposeFuncs = true;
 
 	// Various constants
 	utils.constants = {
